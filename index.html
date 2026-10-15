@@ -311,7 +311,7 @@ function itemOf(s,i){return THEMES[s.th].items[i]}
 function next(s){
   const full=s.p.map(p=>p.it.length>=SLOTS);
   if((full[0]&&full[1])||!s.deck.length){s.ph='end';s.cur=null;s.turn=-1;addLog(s,'¡Plantillas completas!');return}
-  s.cur=s.deck.shift();s.bid=0;s.hb=-1;s.passed=0;
+  s.cur=s.deck.shift();s.bid=0;s.hb=-1;s.passed=0;s.eb=0;s.eby=-1;
   if(full[0]||full[1]){s.ph='free';s.dec=full[0]?1:0;s.turn=s.dec;return}
   const broke=s.p.map(p=>p.c<=0);
   if(broke[0]||broke[1]){s.ph='decide';s.dec=(broke[0]&&broke[1])?(s.start=1-s.start):(broke[0]?1:0);s.turn=s.dec;return}
@@ -319,6 +319,10 @@ function next(s){
 }
 function award(s){const w=s.p[s.hb];const it=itemOf(s,s.cur);w.c-=s.bid;w.it.push(s.cur);
   addLog(s,`🔨 ${w.n} gana ${it.e} ${it.n} por ${s.bid} 🪙`);if(w.c===0)addLog(s,`${w.n} se quedó sin monedas`);next(s)}
+function acceptDump(s){const payer=s.p[s.eby],taker=s.p[1-s.eby],it=itemOf(s,s.cur);
+  payer.c-=s.eb;taker.c+=s.eb;taker.it.push(s.cur);
+  addLog(s,`🤝 ${taker.n} se queda con ${it.e} ${it.n} y recibe ${s.eb} 🪙 de ${payer.n}`);
+  if(payer.c===0)addLog(s,`${payer.n} se quedó sin monedas`);next(s)}
 function apply(s0,a,who){
   const s=clone(s0);
   if(s.ph==='end')return{err:'La partida ya terminó'};
@@ -337,13 +341,19 @@ function apply(s0,a,who){
       if(s.hb>=0){addLog(s,`${me.n} no sube la puja`);award(s);break}
       s.passed++;addLog(s,`${me.n} pasa`);
       if(s.passed>=2){addLog(s,`Nadie quiso ${nm}; vuelve al final de la fila`);s.deck.push(s.cur);next(s)}else s.turn=1-who;break;
-    case'endorse':
-      if(s.ph!=='auction')return{err:'Ahora no se puede endosar'};
+    case'endorse':{
+      if(s.ph!=='auction'&&s.ph!=='dump')return{err:'Ahora no se puede endosar'};
       if(ot.it.length>=SLOTS)return{err:`${ot.n} ya tiene 5 elementos; no le puedes endosar más`};
-      if(amt<1)return{err:'Paga al menos 1 🪙 para endosar'};
+      const emin=s.ph==='dump'?s.eb+1:1;
+      if(amt<emin)return{err:s.ph==='dump'?`Para devolverlo debes ofrecer más de ${s.eb} 🪙`:'Ofrece al menos 1 🪙 para endosar'};
       if(amt>me.c)return{err:`Solo tienes ${me.c} 🪙`};
-      me.c-=amt;ot.c+=amt;ot.it.push(s.cur);addLog(s,`💸 ${me.n} pagó ${amt} 🪙 a ${ot.n} para que se quede con ${nm}`);
-      if(me.c===0)addLog(s,`${me.n} se quedó sin monedas`);next(s);break;
+      addLog(s,s.ph==='dump'?`💸 ${me.n} sube a ${amt} 🪙 para devolverle ${nm} a ${ot.n}`:`💸 ${me.n} ofrece ${amt} 🪙 a ${ot.n} para endosarle ${nm}`);
+      s.ph='dump';s.eb=amt;s.eby=who;s.bid=0;s.hb=-1;s.turn=1-who;
+      if(ot.c<=amt){addLog(s,`${ot.n} no tiene monedas para devolverlo`);acceptDump(s)}
+      break}
+    case'accept':
+      if(s.ph!=='dump')return{err:'No hay ningún endoso que aceptar'};
+      acceptDump(s);break;
     case'keep':
       if(s.ph!=='decide'&&s.ph!=='free')return{err:'Ahora no se puede'};
       if(me.it.length>=SLOTS)return{err:'Ya tienes 5 elementos en tu plantilla'};
@@ -378,7 +388,8 @@ function afterChange(prev,s){
     if(was&&was.c>0&&p.c<=0&&s.ph!=='end')toast(`🪙 ${p.n} se quedó sin monedas. ${s.p[1-i].n} decide a dónde va cada elemento.`);
   });
   app.bump=prev?s.p.map((p,i)=>prev.p[i].c!==p.c):null;
-  if(!prev||prev.cur!==s.cur){app.ui.endOpen=false;app.ui.end=1}
+  if(!prev||prev.cur!==s.cur)app.ui.endOpen=false;
+  app.ui.end=s.ph==='dump'?s.eb+1:1;
   const me=s.turn>=0?s.p[s.turn]:null;app.ui.bid=me?Math.min(s.bid+1,Math.max(me.c,1)):1;
   if(s.ph==='end'&&(!prev||prev.ph!=='end'))setTimeout(confetti,250);
   render();
@@ -515,7 +526,7 @@ function renderHome(){
         <li>Cada jugador empieza con <b>20 monedas</b> y debe terminar con <b>5 elementos</b>.</li>
         <li>Sale un elemento a la vez. Pujen por turnos: subes la puja o pasas. Quien no sube, lo pierde.</li>
         <li>No puedes pujar más monedas de las que tienes, ni pujar si tu plantilla ya tiene 5.</li>
-        <li>También salen <b>elementos troll 🤡</b>. ¿Te tocó uno que no quieres? <b>Endósalo</b>: le pagas monedas a tu rival y él se lo queda.</li>
+        <li>También salen <b>elementos troll 🤡</b>. ¿Te tocó uno que no quieres? <b>Endósalo</b>: ofrece monedas a tu rival para que se lo quede. Él puede aceptar o pagarte más para devolvértelo, y así hasta que alguien acepte.</li>
         <li>Cuando alguien se queda sin monedas, el otro decide qué elementos se queda y cuáles van al rival.</li>
         <li>No hay puntos: al final comparan sus plantillas y deciden cuál quedó mejor.</li></ol></div>
     </section>`;
@@ -594,6 +605,16 @@ function renderControls(s){
       <div class="bidline"><span class="turnlbl" style="--tc:${col}">${youLbl}</span><span class="pill">Te faltan ${SLOTS-me.it.length}</span></div>
       ${act?`<div class="actions"><button class="btn big p${who}" data-act="keep">Me lo quedo</button><button class="btn big" data-act="skip" ${canSkip?'':'disabled'}>Ver el siguiente</button></div>${canSkip?'':'<p class="note">Ya no quedan suficientes elementos para descartar este.</p>'}`:wait}</section>`;
   }
+  if(s.ph==='dump'){
+    const payer=s.p[s.eby],emin=s.eb+1,canBack=me.c>=emin;
+    const e=Math.max(emin,Math.min(app.ui.end,me.c));app.ui.end=e;
+    return `<section class="bidbox sticker"><div class="bidline"><div class="bidnow"><div class="coin num">${s.eb}</div><div><small class="eyebrow">Oferta de endoso</small><br><b>${esc(payer.n)} paga</b></div></div><span class="turnlbl" style="--tc:${col}">${youLbl}</span></div>
+      <div class="banner">💸 <b>${esc(payer.n)}</b> le ofrece <b>${s.eb} 🪙</b> a <b>${esc(me.n)}</b> para que se quede con este elemento. ${esc(me.n)} puede aceptar el dinero o pagar más para devolverlo.</div>
+      ${act?`<div class="actions"><button class="btn big mint" data-act="accept">Aceptar (+${s.eb} 🪙)</button></div>
+      ${canBack?`<div class="endorse"><b>Devuélvelo: ofrece más que ${s.eb} 🪙 a ${esc(payer.n)}.</b>
+        <div class="row"><div class="stepper"><button data-act="estep" data-d="-1" aria-label="Menos">−</button><input id="endamt" type="number" inputmode="numeric" min="${emin}" max="${me.c}" value="${e}" aria-label="Monedas para devolverlo"><button data-act="estep" data-d="1" aria-label="Más">+</button></div>
+        <button class="btn pink" data-act="endorse" id="endbtn">Pagar ${e} 🪙 y devolverlo</button></div></div>`:`<p class="note">No te alcanza para devolverlo.</p>`}`:wait}</section>`;
+  }
   const hb=s.hb>=0?s.p[s.hb]:null;
   const min=s.bid+1,canBid=me.c>=min;
   const status=hb?`<div class="bidnow"><div class="coin num">${s.bid}</div><div><small class="eyebrow">Puja más alta</small><br><b>${esc(hb.n)}</b></div></div>`:`<div class="bidnow"><div class="coin">0</div><div><small class="eyebrow">Sin pujas todavía</small><br><b>¿Quién abre?</b></div></div>`;
@@ -606,9 +627,9 @@ function renderControls(s){
       :`<div class="banner warn">Solo tienes ${me.c} 🪙: no te alcanza para superar ${s.bid}.</div>`}
       <div class="actions">${canBid?`<button class="btn big p${who}" data-act="bid" id="bidbtn">Pujar ${b} 🪙</button>`:''}<button class="btn big" data-act="pass">${hb?`Pasar (gana ${esc(hb.n)})`:'Pasar'}</button>
         <button class="btn big pink" data-act="toggleEnd" ${me.c<1||ot.it.length>=SLOTS?'disabled':''}>💸 Endosar</button></div>
-      ${app.ui.endOpen?`<div class="endorse"><b>Paga monedas a ${esc(ot.n)} para que se quede con este elemento.</b>
+      ${app.ui.endOpen?`<div class="endorse"><b>Ofrece monedas a ${esc(ot.n)} para que se quede con este elemento. Puede aceptar o pagarte más para devolvértelo.</b>
         <div class="row"><div class="stepper"><button data-act="estep" data-d="-1" aria-label="Menos">−</button><input id="endamt" type="number" inputmode="numeric" min="1" max="${me.c}" value="${e}" aria-label="Monedas para endosar"><button data-act="estep" data-d="1" aria-label="Más">+</button></div>
-        <button class="btn pink" data-act="endorse" id="endbtn">Pagar ${e} 🪙 y endosar</button></div></div>`:''}`;
+        <button class="btn pink" data-act="endorse" id="endbtn">Ofrecer ${e} 🪙 y endosar</button></div></div>`:''}`;
   }
   return `<section class="bidbox sticker"><div class="bidline">${status}<span class="turnlbl" style="--tc:${col}">${youLbl}</span></div>${controls}</section>`;
 }
@@ -699,6 +720,7 @@ document.addEventListener('click',e=>{
     case'pass':doAct({t:'pass'});break;
     case'toggleEnd':app.ui.endOpen=!app.ui.endOpen;render();break;
     case'endorse':doAct({t:'endorse',a:app.ui.end});break;
+    case'accept':doAct({t:'accept'});break;
     case'keep':doAct({t:'keep'});break;
     case'give':doAct({t:'give'});break;
     case'skip':doAct({t:'skip'});break;
@@ -711,8 +733,8 @@ document.addEventListener('click',e=>{
 function setBid(v){const s=app.st,me=s.p[s.turn],min=s.bid+1;
   if(v>me.c){toast(`No puedes pujar más de ${me.c} 🪙: es todo lo que tienes`);v=me.c}
   if(v<min){v=min}app.ui.bid=v;const i=document.getElementById('bidamt'),bb=document.getElementById('bidbtn');if(i)i.value=v;if(bb)bb.textContent=`Pujar ${v} 🪙`}
-function setEnd(v){const s=app.st,me=s.p[s.turn];
-  if(v>me.c){toast(`Solo tienes ${me.c} 🪙`);v=me.c}if(v<1)v=1;app.ui.end=v;const i=document.getElementById('endamt'),bb=document.getElementById('endbtn');if(i)i.value=v;if(bb)bb.textContent=`Pagar ${v} 🪙 y endosar`}
+function setEnd(v){const s=app.st,me=s.p[s.turn],emin=s.ph==='dump'?s.eb+1:1;
+  if(v>me.c){toast(`Solo tienes ${me.c} 🪙`);v=me.c}if(v<emin)v=emin;app.ui.end=v;const i=document.getElementById('endamt'),bb=document.getElementById('endbtn');if(i)i.value=v;if(bb)bb.textContent=app.st.ph==='dump'?`Pagar ${v} 🪙 y devolverlo`:`Ofrecer ${v} 🪙 y endosar`}
 document.addEventListener('change',e=>{
   if(e.target.id==='bidamt')setBid(Math.floor(+e.target.value||0));
   if(e.target.id==='endamt')setEnd(Math.floor(+e.target.value||0));
@@ -721,7 +743,7 @@ document.addEventListener('input',e=>{
   const s=app.st;if(!s||s.turn<0)return;const me=s.p[s.turn];
   if((e.target.id==='bidamt'||e.target.id==='endamt')&&+e.target.value>me.c){toast(`No puedes usar más de ${me.c} 🪙: es todo lo que tienes`);e.target.value=me.c}
   if(e.target.id==='bidamt'&&e.target.value){const v=Math.floor(+e.target.value);app.ui.bid=v;const bb=document.getElementById('bidbtn');if(bb)bb.textContent=`Pujar ${v} 🪙`}
-  if(e.target.id==='endamt'&&e.target.value){const v=Math.floor(+e.target.value);app.ui.end=v;const bb=document.getElementById('endbtn');if(bb)bb.textContent=`Pagar ${v} 🪙 y endosar`}
+  if(e.target.id==='endamt'&&e.target.value){const v=Math.floor(+e.target.value);app.ui.end=v;const bb=document.getElementById('endbtn');if(bb)bb.textContent=app.st.ph==='dump'?`Pagar ${v} 🪙 y devolverlo`:`Ofrecer ${v} 🪙 y endosar`}
 });
 document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='code')joinRoom();

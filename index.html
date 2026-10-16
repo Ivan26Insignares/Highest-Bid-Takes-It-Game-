@@ -236,7 +236,7 @@ input.t.code{text-transform:uppercase;letter-spacing:.3em;font-family:var(--disp
 <div class="wrap" id="app"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
-<script src="peerjs.min.js"></script>
+<script src="mqtt.min.js"></script>
 <script>
 /* ================= DATOS ================= */
 const CATS={
@@ -399,10 +399,10 @@ function doAct(a){
   if(app.mode!=='online'){const r=apply(s,a,s.turn);if(r.err)return toast(r.err);setState(r.s);return}
   const who=myIdx();const r=apply(s,a,who);if(r.err)return toast(r.err);
   if(app.net.role==='host'){setState(r.s);pushState()}
-  else{if(!app.net.open)return toast('Sin conexión con el anfitrión. Toca Reconectar.');app.net.pending=true;app.net.conn.send({t:'act',a});
+  else{const n=app.net;if(!n.hostOn)return toast('Sin conexión con el anfitrión. Toca Reconectar.');n.pending=true;pub(n.c,n.base+'/g',{t:'act',id:n.id,aid:rid(),a});
     clearTimeout(app.net.pt);app.net.pt=setTimeout(()=>{if(app.net&&app.net.pending){app.net.pending=false;render()}},4000);render()}
 }
-function pushState(){const n=app.net;if(n&&n.role==='host'&&n.conn&&n.conn.open)n.conn.send({t:'st',st:app.st,host:app.myName||'Anfitrión'})}
+function pushState(){const n=app.net;if(n&&n.role==='host'&&n.c)pub(n.c,n.base+'/h',{t:'st',st:app.st,host:n.name||'Anfitrión',gid:n.guestId},true)}
 
 function startLocal(){
   const n0=(document.getElementById('n0').value.trim()||'Jugador 1').slice(0,14),n1=(document.getElementById('n1').value.trim()||'Jugador 2').slice(0,14);
@@ -411,66 +411,95 @@ function startLocal(){
   setState(newGame(dailyThemes(day)[app.sel],app.names,day));window.scrollTo({top:0,behavior:'smooth'});
 }
 const CODE_CH='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-const PEER_OPTS=(()=>{try{const q=new URLSearchParams(location.search).get('peerhost');if(!q)return{};const[host,port]=q.split(':');return{host,port:+port||9000,path:'/',secure:false}}catch{return{}}})();
+const BROKERS=(()=>{try{const q=new URLSearchParams(location.search).get('broker');if(q)return[q]}catch{}return['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081']})();
+const TOPIC=code=>'elquemaspuja/v1/'+code.toLowerCase();
+const rid=()=>Math.random().toString(36).slice(2,10);
+const parseMsg=p=>{try{return JSON.parse(p.toString())}catch{return null}};
+function pub(c,topic,obj,retain){try{c.publish(topic,JSON.stringify(obj),{qos:1,retain:!!retain})}catch{}}
 function readMyName(){const el=document.getElementById('myname');const v=((el&&el.value.trim())||'').slice(0,14);if(v){app.myName=v;store.set('myName',v)}return v}
-function newPeer(id){return new Promise((res,rej)=>{let p;try{p=id?new Peer(id,PEER_OPTS):new Peer(PEER_OPTS)}catch(e){rej(e);return}
-  const t=setTimeout(()=>{rej({type:'timeout'});try{p.destroy()}catch{}},15000);
-  p.on('open',()=>{clearTimeout(t);res(p)});p.on('error',e=>{clearTimeout(t);rej(e)})})}
+function brokerConnect(url){return new Promise((res,rej)=>{let c;try{c=mqtt.connect(url,{clientId:'eqmp_'+rid(),clean:true,connectTimeout:7000,reconnectPeriod:0,keepalive:20})}catch(e){rej(e);return}
+  const t=setTimeout(()=>{try{c.end(true)}catch{}rej(new Error('timeout'))},8000);
+  c.once('connect',()=>{clearTimeout(t);c.options.reconnectPeriod=2000;res(c)});
+  c.once('error',e=>{clearTimeout(t);try{c.end(true)}catch{}rej(e)})})}
+async function anyBroker(){for(const u of BROKERS){try{return await brokerConnect(u)}catch{}}return null}
+function firstMsg(c,topic,ms){return new Promise(res=>{let done=false;const fin=v=>{if(done)return;done=true;c.removeListener('message',h);res(v)};
+  const h=(t,p)=>{if(t===topic)fin(parseMsg(p))};c.on('message',h);c.subscribe(topic,{qos:1},e=>{if(e)fin(null)});setTimeout(()=>fin(null),ms)})}
 async function createRoom(){
   if(roomState!=='on')return toast('El modo en línea no está disponible');
   const name=readMyName();if(!name)return toast('Escribe tu nombre primero');
-  let peer=null,code='';
-  for(let k=0;k<4&&!peer;k++){code='';for(let i=0;i<4;i++)code+=CODE_CH[Math.floor(Math.random()*CODE_CH.length)];
-    try{peer=await newPeer('eqmp-'+code.toLowerCase())}catch(e){if(!e||e.type!=='unavailable-id'){toast('No se pudo crear la sala. Revisa tu conexión.');return}}}
-  if(!peer)return toast('No se pudo crear la sala. Intenta de nuevo.');
-  const n={role:'host',peer,code,conn:null,guest:null,pending:false,theme:dailyThemes(dayKey())[app.sel]};
+  toast('Creando sala…');
+  const c=await anyBroker();if(!c)return toast('No se pudo conectar al servidor de salas. Revisa tu internet.');
+  let code='';
+  for(let k=0;k<5;k++){code='';for(let i=0;i<4;i++)code+=CODE_CH[Math.floor(Math.random()*CODE_CH.length)];
+    const ex=await firstMsg(c,TOPIC(code)+'/h',1200);c.unsubscribe(TOPIC(code)+'/h');if(!ex||!ex.t)break}
+  const n={role:'host',c,code,base:TOPIC(code),name,guest:null,guestId:null,guestSeen:0,guestOn:false,lastAct:null,pending:false,theme:dailyThemes(dayKey())[app.sel]};
   app.net=n;app.mode='online';app.screen='lobby';app.st=null;
-  peer.on('connection',conn=>{
-    conn.on('data',d=>onHostData(n,conn,d));
-    conn.on('close',()=>{if(app.net!==n||n.conn!==conn)return;n.conn=null;toast(`${n.guest||'Tu rival'} salió de la sala`);if(!app.st)n.guest=null;render()});
-  });
-  peer.on('disconnected',()=>{if(app.net===n&&!peer.destroyed)try{peer.reconnect()}catch{}});
-  peer.on('error',e=>{if(app.net===n&&e&&(e.type==='network'||e.type==='server-error'))toast('Problema de conexión con el servidor de salas')});
+  c.on('message',(t,p)=>{if(app.net===n&&t===n.base+'/g')onHostMsg(n,parseMsg(p))});
+  c.subscribe(n.base+'/g',{qos:1});
+  c.on('connect',()=>{if(app.net===n){c.subscribe(n.base+'/g',{qos:1});pushState()}});
+  pushState();
+  n.timer=setInterval(()=>{if(app.net!==n)return clearInterval(n.timer);pub(c,n.base+'/p',{t:'ping'});
+    const was=n.guestOn;n.guestOn=!!n.guestId&&Date.now()-n.guestSeen<12000;
+    if(was&&!n.guestOn){toast(`${n.guest||'Tu rival'} se desconectó`);if(!app.st){n.guest=null;n.guestId=null}render()}},4000);
   render();
 }
-function onHostData(n,conn,d){
-  if(app.net!==n||!d||typeof d!=='object')return;
+function onHostMsg(n,d){
+  if(!d||typeof d!=='object'||!d.id)return;
   if(d.t==='hello'){
     const nm=String(d.name||'Invitado').slice(0,14);
-    if((n.conn&&n.conn!==conn&&n.conn.open)||(app.st&&n.guest&&nm!==n.guest)){conn.send({t:'full'});setTimeout(()=>conn.close(),400);return}
-    const back=app.st&&!n.conn;n.conn=conn;n.guest=nm;if(back)toast(`${nm} volvió a la sala`);
-    pushState();render();return}
-  if(d.t==='act'&&conn===n.conn&&app.st&&d.a&&typeof d.a==='object'){const r=apply(app.st,d.a,1);if(r.s){setState(r.s);pushState()}else conn.send({t:'err',m:r.err})}
+    if(nm!==n.guest&&((n.guestOn&&n.guestId&&n.guestId!==d.id)||(app.st&&n.guest))){pub(n.c,n.base+'/f',{t:'full',to:d.id});return}
+    const back=app.st&&n.guestId!==d.id;n.guestId=d.id;n.guest=nm;n.guestSeen=Date.now();n.guestOn=true;
+    if(back)toast(`${nm} volvió a la sala`);pushState();render();return}
+  if(d.id!==n.guestId)return;
+  n.guestSeen=Date.now();if(!n.guestOn){n.guestOn=true;render()}
+  if(d.t==='act'&&app.st&&d.a&&typeof d.a==='object'&&d.aid!==n.lastAct){n.lastAct=d.aid;const r=apply(app.st,d.a,1);
+    if(r.s){setState(r.s);pushState()}else pub(n.c,n.base+'/f',{t:'err',to:d.id,m:r.err})}
 }
-function startOnline(){const n=app.net;if(!n||!n.guest||!n.conn)return;app.screen='game';app.flipKey=null;setState(newGame(n.theme,[app.myName||'Anfitrión',n.guest],dayKey()));pushState()}
-async function joinRoom(){
+function startOnline(){const n=app.net;if(!n||!n.guest||!n.guestOn)return;app.screen='game';app.flipKey=null;setState(newGame(n.theme,[app.myName||'Anfitrión',n.guest],dayKey()));pushState()}
+async function joinRoom(again){
   if(roomState!=='on')return toast('El modo en línea no está disponible');
-  const name=readMyName();if(!name)return toast('Escribe tu nombre primero');
-  const code=(document.getElementById('code').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
-  if(code.length!==4)return toast('El código de sala tiene 4 caracteres');
-  let peer;try{peer=await newPeer()}catch{return toast('No se pudo conectar. Revisa tu internet.')}
-  const n={role:'guest',peer,code,conn:null,host:null,pending:false,open:false,notFound:false,name};
-  app.net=n;app.mode='online';app.screen='lobby';app.st=null;
-  peer.on('error',e=>{if(app.net!==n)return;if(e&&e.type==='peer-unavailable'){n.notFound=true;render()}});
-  peer.on('disconnected',()=>{if(app.net===n&&!peer.destroyed)try{peer.reconnect()}catch{}});
-  connectGuest();render();
+  let name,code;
+  if(again&&app.net){name=app.net.name;code=app.net.code}
+  else{name=readMyName();if(!name)return toast('Escribe tu nombre primero');
+    code=(document.getElementById('code').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(code.length!==4)return toast('El código de sala tiene 4 caracteres')}
+  await leaveRoom();
+  const n={role:'guest',c:null,code,base:TOPIC(code),name,id:rid(),host:null,hostSeen:0,hostOn:false,open:false,notFound:false,pending:false};
+  app.net=n;app.mode='online';app.screen='lobby';app.st=null;render();
+  for(const u of BROKERS){let c;try{c=await brokerConnect(u)}catch{continue}
+    if(app.net!==n){try{c.end(true)}catch{}return}
+    const d=await firstMsg(c,n.base+'/h',3000);
+    if(app.net!==n){try{c.end(true)}catch{}return}
+    if(d&&d.t==='st'){n.c=c;setupGuest(n,d);return}
+    try{c.end(true)}catch{}}
+  if(app.net===n){n.notFound=true;render()}
 }
-function connectGuest(){
-  const n=app.net;if(!n||n.role!=='guest')return;n.notFound=false;
-  try{if(n.conn)n.conn.close()}catch{}
-  const conn=n.peer.connect('eqmp-'+n.code.toLowerCase(),{reliable:true});n.conn=conn;
-  conn.on('open',()=>{if(n.conn!==conn)return;n.open=true;conn.send({t:'hello',name:n.name});render()});
-  conn.on('data',d=>{if(n.conn===conn)onGuestData(n,d)});
-  conn.on('close',()=>{if(app.net!==n||n.conn!==conn)return;n.open=false;n.pending=false;toast('Se perdió la conexión con el anfitrión');render()});
+function setupGuest(n,first){
+  const c=n.c;n.open=true;n.hostOn=true;n.hostSeen=Date.now();
+  c.on('message',(t,p)=>{if(app.net!==n)return;const d=parseMsg(p);if(!d)return;
+    if(t===n.base+'/p'){n.hostSeen=Date.now();if(!n.hostOn){n.hostOn=true;render()}return}
+    if(t===n.base+'/f'){if(d.to!==n.id)return;
+      if(d.t==='full'){toast('Esa sala ya tiene dos jugadores');goHome()}else if(d.t==='err'){n.pending=false;toast(d.m||'Jugada no válida');render()}return}
+    if(t===n.base+'/h'&&d.t==='st'){n.hostSeen=Date.now();n.hostOn=true;onGuestState(n,d)}});
+  c.subscribe([n.base+'/h',n.base+'/p',n.base+'/f'],{qos:1});
+  c.on('connect',()=>{if(app.net===n){c.subscribe([n.base+'/h',n.base+'/p',n.base+'/f'],{qos:1});hello(n)}});
+  hello(n);
+  n.timer=setInterval(()=>{if(app.net!==n)return clearInterval(n.timer);pub(c,n.base+'/g',{t:'ping',id:n.id});
+    const was=n.hostOn;n.hostOn=Date.now()-n.hostSeen<12000;if(was&&!n.hostOn){n.pending=false;toast('Se perdió la conexión con el anfitrión');render()}},4000);
+  onGuestState(n,first);
 }
-function onGuestData(n,d){
-  if(app.net!==n||!d||typeof d!=='object')return;
-  if(d.t==='full'){toast('Esa sala ya tiene dos jugadores');goHome();return}
-  if(d.t==='err'){n.pending=false;toast(d.m||'Jugada no válida');render();return}
-  if(d.t==='st'){n.host=String(d.host||'Anfitrión').slice(0,14);n.pending=false;
-    if(d.st&&d.st.p&&d.st.deck){app.screen='game';setState(d.st)}else{if(app.st){app.st=null;app.screen='lobby'}render()}}
+function hello(n){pub(n.c,n.base+'/g',{t:'hello',id:n.id,name:n.name})}
+function connectGuest(){const n=app.net;if(!n||n.role!=='guest')return;if(!n.c){joinRoom(true);return}try{if(!n.c.connected)n.c.reconnect()}catch{}hello(n)}
+function onGuestState(n,d){
+  n.host=String(d.host||'Anfitrión').slice(0,14);
+  if(d.st&&d.st.p&&d.st.deck){if(d.gid!==n.id){render();return}
+    n.pending=false;app.screen='game';if(JSON.stringify(d.st)!==JSON.stringify(app.st))setState(d.st);else render()}
+  else{if(app.st){app.st=null;app.screen='lobby'}render()}
 }
-async function leaveRoom(){const n=app.net;app.net=null;if(!n)return;try{if(n.conn)n.conn.close()}catch{}try{n.peer.destroy()}catch{}}
+async function leaveRoom(){const n=app.net;app.net=null;if(!n)return;clearInterval(n.timer);if(!n.c)return;
+  try{if(n.role==='host')n.c.publish(n.base+'/h','',{qos:1,retain:true})}catch{}
+  setTimeout(()=>{try{n.c.end()}catch{}},300)}
+window.addEventListener('pagehide',()=>{const n=app.net;if(n&&n.role==='host'&&n.c){try{n.c.publish(n.base+'/h','',{qos:0,retain:true})}catch{}}});
 
 function rematch(){
   const s=app.st;if(!s)return;
@@ -492,8 +521,8 @@ function render(){
 }
 function renderTop(){
   let right='';
-  if(app.mode==='online'&&app.net){const n=app.net;const rival=n.role==='host'?(n.conn&&n.conn.open?n.guest:null):(n.open?n.host:null);
-    right=`<div class="netbar"><span class="pill">🌐 Sala <b>${esc(n.code)}</b></span><span class="pill">${rival?'🟢 '+esc(rival)+' conectado':'🔴 Rival sin conectar'}</span>${n.role==='guest'&&!n.open&&app.st?'<button class="btn" data-act="reconnect">Reconectar</button>':''}</div>`}
+  if(app.mode==='online'&&app.net){const n=app.net;const rival=n.role==='host'?(n.guestOn?n.guest:null):(n.hostOn?n.host:null);
+    right=`<div class="netbar"><span class="pill">🌐 Sala <b>${esc(n.code)}</b></span><span class="pill">${rival?'🟢 '+esc(rival)+' conectado':'🔴 Rival sin conectar'}</span>${n.role==='guest'&&!n.hostOn&&app.st?'<button class="btn" data-act="reconnect">Reconectar</button>':''}</div>`}
   else if(app.screen==='game')right=`<span class="pill">📱 Misma pantalla</span>`;
   return `<header class="top"><div class="brand"><div class="gavel" aria-hidden="true">🔨</div><div><h1>El Que Más <span>Puja</span></h1><small>Subastas con temas nuevos cada día</small></div></div>${right}</header>`;
 }
@@ -538,8 +567,8 @@ function renderLobby(){
       <div class="row" style="justify-content:center"><button class="btn" data-act="copy">📋 Copiar código</button></div>
       <p class="note" style="max-width:46ch">Pásale este código a tu amigo. Debe abrir este mismo enlace, elegir <b>En línea con un amigo</b> y escribirlo en <b>Unirme</b>.</p>
       <span class="cat">${CATS[t.c].e} ${esc(t.t)}</span>
-      ${n.guest&&n.conn?`<div class="banner info">✅ <b>${esc(n.guest)}</b> está en la sala</div>`:`<p class="waiting">Esperando a tu rival…</p>`}
-      <div class="row" style="justify-content:center"><button class="btn big gold" data-act="startOnline" ${n.guest&&n.conn?'':'disabled'}>¡Empezar partida!</button><button class="btn ghost" data-act="home">Salir</button></div></section>`}
+      ${n.guest&&n.guestOn?`<div class="banner info">✅ <b>${esc(n.guest)}</b> está en la sala</div>`:`<p class="waiting">Esperando a tu rival…</p>`}
+      <div class="row" style="justify-content:center"><button class="btn big gold" data-act="startOnline" ${n.guest&&n.guestOn?'':'disabled'}>¡Empezar partida!</button><button class="btn ghost" data-act="home">Salir</button></div></section>`}
   return `<section class="lobby sticker"><div class="eyebrow">Sala ${esc(n.code)}</div>
     ${n.open?`<h2>¡Estás dentro!</h2><p class="waiting">Esperando a que ${esc(n.host||'el anfitrión')} empiece la partida…</p>`:n.notFound?`<h2>No encontramos esa sala</h2><p class="note">Revisa el código. La sala existe mientras quien la creó tenga el juego abierto.</p><button class="btn" data-act="reconnect">Intentar de nuevo</button>`:`<h2>Buscando la sala…</h2><p class="waiting">Conectando…</p>`}
     <button class="btn ghost" data-act="home">Salir</button></section>`;
@@ -751,7 +780,7 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ================= ARRANQUE ================= */
-roomState=window.Peer?'on':'off';
+roomState=window.mqtt?'on':'off';
 function start(data){
   if(data&&data.st&&data.mode==='local'){app.st=data.st;app.mode='local';app.screen='game';app.names=data.st.p.map(p=>p.n)}
   if(data&&typeof data.sel==='number')app.sel=data.sel;

@@ -66,10 +66,11 @@ h1,h2,h3{font-family:var(--display);font-weight:400;margin:0;text-wrap:balance;l
 .countdown .eyebrow{color:#BDB5E8}
 .countdown b{font-family:var(--display);font-weight:400;font-size:30px;color:#fff;font-variant-numeric:tabular-nums}
 .themes{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.cathead{grid-column:1/-1;font-size:20px;margin-top:6px}
 .theme{position:relative;text-align:left;padding:0;overflow:hidden;display:flex;flex-direction:column;border:3px solid var(--ink);border-radius:20px;background:var(--paper);box-shadow:5px 5px 0 var(--ink);transition:transform .12s}
 .theme:hover{transform:translateY(-3px) rotate(-.6deg)}
 .theme.sel{box-shadow:5px 5px 0 var(--ink),0 0 0 5px var(--gold);transform:translateY(-4px)}
-.theme .tart{height:116px;display:grid;place-items:center;font-size:60px;background:radial-gradient(circle at 50% 60%,rgba(255,255,255,.55) 0 28%,transparent 29%),repeating-conic-gradient(from 0deg,var(--a) 0 12deg,var(--b) 12deg 24deg);border-bottom:3px solid var(--ink)}
+.theme .tart{height:96px;display:grid;place-items:center;font-size:60px;background:radial-gradient(circle at 50% 60%,rgba(255,255,255,.55) 0 28%,transparent 29%),repeating-conic-gradient(from 0deg,var(--a) 0 12deg,var(--b) 12deg 24deg);border-bottom:3px solid var(--ink)}
 .theme .tbody{padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;flex:1}
 .theme h3{font-size:19px;line-height:1.15}
 .theme .peek{font-size:20px;letter-spacing:2px;opacity:.9}
@@ -204,7 +205,7 @@ input.t.code{text-transform:uppercase;letter-spacing:.3em;font-family:var(--disp
 
 @media (max-width:980px){
   .themes{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .themes .theme:last-child{grid-column:1/-1}
+  .cathead{font-size:16px}
   .setup{grid-template-columns:minmax(0,1fr)}
   .board{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-areas:"stage stage" "p0 p1"}
 }
@@ -293,8 +294,7 @@ function seeded(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charC
   return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function shuffle(arr,rnd){for(let i=arr.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}return arr}
 function dayKey(d=new Date()){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
-function dailyThemes(day){const rnd=seeded('temas|'+day);const cats=shuffle(Object.keys(CATS),rnd).slice(0,5);
-  return cats.map(c=>{const list=THEMES.map((t,i)=>t.c===c?i:-1).filter(i=>i>=0);return list[Math.floor(rnd()*list.length)]})}
+function dailyThemes(){return THEMES.map((_,i)=>i)}
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const clone=o=>JSON.parse(JSON.stringify(o));
 const store={get(k,d){try{const v=localStorage.getItem('eqmp.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('eqmp.'+k,JSON.stringify(v))}catch{}}};
@@ -527,11 +527,12 @@ function renderTop(){
   return `<header class="top"><div class="brand"><div class="gavel" aria-hidden="true">🔨</div><div><h1>El Que Más <span>Puja</span></h1><small>Subastas con temas nuevos cada día</small></div></div>${right}</header>`;
 }
 function renderHome(){
-  const day=dayKey(),daily=dailyThemes(day);if(app.sel>4)app.sel=0;
-  const dateLbl=new Intl.DateTimeFormat('es-MX',{weekday:'long',day:'numeric',month:'long'}).format(new Date());
-  const tiles=daily.map((ti,k)=>{const t=THEMES[ti],c=CATS[t.c];return `<button class="theme ${k===app.sel?'sel':''}" data-act="pick" data-i="${k}" style="--a:${c.a};--b:${c.b}" aria-pressed="${k===app.sel}">
+  if(!(app.sel>=0&&app.sel<THEMES.length))app.sel=0;
+  const tile=k=>{const t=THEMES[k],c=CATS[t.c];return `<button class="theme ${k===app.sel?'sel':''}" data-act="pick" data-i="${k}" style="--a:${c.a};--b:${c.b}" aria-pressed="${k===app.sel}">
     <div class="tart" aria-hidden="true">${t.e}</div><span class="tick">✓</span>
-    <div class="tbody"><span class="cat">${c.e} ${esc(t.c)}</span><h3>${esc(t.t)}</h3><div class="peek" aria-hidden="true">${t.items.slice(0,6).map(x=>x.e).join('')}</div></div></button>`}).join('');
+    <div class="tbody"><span class="cat">${c.e} ${esc(t.c)}</span><h3>${esc(t.t)}</h3><div class="peek" aria-hidden="true">${t.items.slice(0,6).map(x=>x.e).join('')}</div></div></button>`};
+  const tiles=THEMES.map((_,k)=>tile(k)).join('');
+  const selT=THEMES[app.sel];
   const online=app.mode==='online';
   let modeBody;
   if(!online)modeBody=`<div class="fields"><label class="f">Jugador 1 <input class="t" id="n0" maxlength="14" value="${esc(app.names[0])}"></label><label class="f">Jugador 2 <input class="t" id="n1" maxlength="14" value="${esc(app.names[1])}"></label></div>
@@ -544,11 +545,9 @@ function renderHome(){
     <div class="or">o únete a la de un amigo</div>
     <div class="row"><input class="t code" id="code" maxlength="4" placeholder="CÓDIGO" style="max-width:190px" autocomplete="off"><button class="btn big mint" data-act="join">Unirme</button></div>
     <p class="note">Quien crea la sala elige el tema. Tu amigo abre este mismo enlace, escribe el código y juegan cada quien desde su dispositivo.</p>`;
-  return `<section class="hero"><div><div class="eyebrow" style="color:#BDB5E8">Temas de hoy · ${esc(dateLbl)}</div><h2>Elige un tema y puja por los mejores elementos</h2><p>Cinco temas nuevos cada día, cada uno de una categoría distinta. Son los mismos para todos y cambian a medianoche.</p></div>
-    <div class="countdown"><div class="eyebrow">Nuevos temas en</div><b id="cd">--:--:--</b></div></section>
-    <section class="themes" aria-label="Temas de hoy">${tiles}</section>
+  return `<section class="hero"><div><div class="eyebrow" style="color:#BDB5E8">${THEMES.length} temas · ${Object.keys(CATS).length} categorías</div><h2>Elige un tema y puja por los mejores elementos</h2><p>Todos los temas están disponibles siempre. Elige uno abajo, escriban sus nombres y que empiece la subasta.</p></div></section>
     <section class="setup">
-      <div class="panel sticker"><div class="eyebrow">¿Cómo van a jugar?</div>
+      <div class="panel sticker"><div class="eyebrow">Tema elegido</div><div class="row"><span class="cat">${CATS[selT.c].e} ${esc(selT.c)}</span><b>${selT.e} ${esc(selT.t)}</b></div><div class="eyebrow">¿Cómo van a jugar?</div>
         <div class="seg" role="group"><button data-act="mode" data-m="local" class="${!online?'on':''}">📱 Misma pantalla</button><button data-act="mode" data-m="online" class="${online?'on':''}">🌐 En línea con un amigo</button></div>
         ${modeBody}</div>
       <div class="panel sticker rules"><div class="eyebrow">Reglas</div><ol>
@@ -558,7 +557,8 @@ function renderHome(){
         <li>También salen <b>elementos troll 🤡</b>. ¿Te tocó uno que no quieres? <b>Endósalo</b>: ofrece monedas a tu rival para que se lo quede. Él puede aceptar o pagarte más para devolvértelo, y así hasta que alguien acepte.</li>
         <li>Cuando alguien se queda sin monedas, el otro decide qué elementos se queda y cuáles van al rival.</li>
         <li>No hay puntos: al final comparan sus plantillas y deciden cuál quedó mejor.</li></ol></div>
-    </section>`;
+    </section>
+    <section class="themes" aria-label="Temas">${tiles}</section>`;
 }
 function renderLobby(){
   const n=app.net;if(!n)return'';
@@ -735,7 +735,7 @@ document.addEventListener('click',e=>{
   const s=app.st,act=b.dataset.act;
   const me=s&&s.turn>=0?s.p[s.turn]:null;
   switch(act){
-    case'pick':app.sel=+b.dataset.i;render();break;
+    case'pick':app.sel=+b.dataset.i;render();toast('Tema elegido: '+THEMES[app.sel].t);break;
     case'mode':app.mode=b.dataset.m;store.set('mode',app.mode);render();break;
     case'startLocal':startLocal();break;
     case'create':createRoom();break;
